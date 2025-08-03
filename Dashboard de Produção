@@ -1,3 +1,69 @@
-https://app.powerbi.com/view?r=eyJrIjoiZGVlMzcxMDUtYmFkYi00ODg1LWFiMjAtY2RlYmZiMTI3Zjk1IiwidCI6ImJkZTBhMGE5LWE3MDItNDk3Yy05Y2M2LTQ1YmVjYzljYTI1YSJ9
+import pandas as pd
+from sqlalchemy import create_engine
+import psycopg2
 
-https://app.powerbi.com/view?r=eyJrIjoiMWJiYzMxNjAtODRlNS00NzE4LWJhZDMtNzRmODYxMWNkNTg5IiwidCI6ImJkZTBhMGE5LWE3MDItNDk3Yy05Y2M2LTQ1YmVjYzljYTI1YSJ9
+DATABASE_URL = "postgresql://user:password@host:port/database"
+engine = create_engine(DATABASE_URL)
+
+query = """
+SELECT 
+    id_ocorrencia,
+    data_ocorrencia,
+    tipo_ocorrencia,
+    equipamento_id,
+    manutentor_id,
+    tempo_parada_minutos,
+    custo_total
+FROM
+    ocorrencias_manutencao
+WHERE
+    data_ocorrencia BETWEEN '2023-01-01' AND '2023-12-31';
+"""
+
+df_ocorrencias = pd.read_sql(query, engine)
+
+df_ocorrencias.info()
+
+df_ocorrencias['custo_total'].fillna(0, inplace=True)
+df_ocorrencias['tempo_parada_minutos'].fillna(0, inplace=True)
+df_ocorrencias['manutentor_id'].fillna('desconhecido', inplace=True)
+
+df_ocorrencias['data_ocorrencia'] = pd.to_datetime(df_ocorrencias['data_ocorrencia'])
+
+df_ocorrencias['ano'] = df_ocorrencias['data_ocorrencia'].dt.year
+df_ocorrencias['mes'] = df_ocorrencias['data_ocorrencia'].dt.month
+df_ocorrencias['dia_da_semana'] = df_ocorrencias['data_ocorrencia'].dt.day_name()
+df_ocorrencias['duracao_horas'] = df_ocorrencias['tempo_parada_minutos'] / 60
+
+ocorrencias_por_mes = df_ocorrencias.groupby('mes')['id_ocorrencia'].count().reset_index(name='total_ocorrencias')
+tempo_medio_parada = df_ocorrencias.groupby('equipamento_id')['tempo_parada_minutos'].mean().reset_index(name='tempo_medio_parada')
+custo_total_por_tipo = df_ocorrencias.groupby('tipo_ocorrencia')['custo_total'].sum().reset_index(name='custo_total')
+
+kpis_resumo = {
+    'total_ocorrencias': df_ocorrencias['id_ocorrencia'].count(),
+    'tempo_total_parada_horas': df_ocorrencias['duracao_horas'].sum(),
+    'custo_total_geral': df_ocorrencias['custo_total'].sum(),
+    'mttr': df_ocorrencias['duracao_horas'].mean()
+}
+
+df_manutencao_mensal = df_ocorrencias.pivot_table(
+    index='tipo_ocorrencia',
+    columns='mes',
+    values='id_ocorrencia',
+    aggfunc='count',
+    fill_value=0
+)
+
+df_manutencao_mensal.loc['Total'] = df_manutencao_mensal.sum()
+
+df_manutencao_mensal_final = pd.concat([df_manutencao_mensal, df_ocorrencias.groupby('tipo_ocorrencia')['id_ocorrencia'].count().rename('Total')], axis=1)
+
+print(kpis_resumo)
+print("\nOcorrências por Mês:")
+print(ocorrencias_por_mes)
+print("\nTempo Médio de Parada por Equipamento:")
+print(tempo_medio_parada.sort_values(by='tempo_medio_parada', ascending=False).head())
+print("\nMatriz de Ocorrências Mensais:")
+print(df_manutencao_mensal_final)
+
+df_ocorrencias.to_csv('dados_producao_tratados.csv', index=False)
